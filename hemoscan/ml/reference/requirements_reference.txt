@@ -1,0 +1,8 @@
+os-sys
+glob2
+numpy==1.19.5
+seaborn==0.11.1
+matplotlib==3.4.2
+tensorflow==2.4.1
+pandas==1.2.4
+scikit-learn==0.24.2

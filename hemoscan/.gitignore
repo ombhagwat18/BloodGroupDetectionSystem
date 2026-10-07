@@ -1,0 +1,11 @@
+node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+backend/data/
+backend/models/*.h5
+ml/data/dataset_blood_group/
+ml/reference/pretrained/*.h5
+.env
+.vscode/
+.ipynb_checkpoints/

@@ -244,7 +244,7 @@ def delete_scan(sid: int):
 async def _ingest(gray, device_id, patient_id=None, slot=None, score=None, command_id=None):
     """Quality-check, classify, store, broadcast. Shared by device uploads and manual uploads."""
     q, q_ok = imaging.quality(gray)
-    pred = await run_in_threadpool(ml.predict, imaging.to_model_input(gray))
+    pred = await run_in_threadpool(ml.predict, gray)
     with db.conn() as c:
         if patient_id is None and slot:
             r = c.execute("SELECT id FROM patients WHERE sensor_slot=?", (slot,)).fetchone()

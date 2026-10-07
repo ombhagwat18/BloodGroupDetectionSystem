@@ -46,12 +46,12 @@ def quality(gray: np.ndarray):
     return score, score >= 35
 
 
-def to_model_input(gray: np.ndarray) -> np.ndarray:
-    """Stretch contrast, resize to 64x64, replicate to 3 channels, scale to [0,1] (as in the notebook)."""
+def to_model_input(gray: np.ndarray, size: int = MODEL_SIZE) -> np.ndarray:
+    """Stretch contrast, resize to size x size (default 64), replicate to 3 channels, scale to [0,1] (as in the notebook)."""
     g = gray.astype(np.float32)
     lo, hi = np.percentile(g, [1, 99])
     if hi - lo > 1:
         g = np.clip((g - lo) / (hi - lo), 0, 1) * 255
-    g = cv2.resize(g, (MODEL_SIZE, MODEL_SIZE), interpolation=cv2.INTER_AREA)
+    g = cv2.resize(g, (size, size), interpolation=cv2.INTER_AREA)
     x = np.repeat(g[..., None], 3, axis=-1) / 255.0
     return x[None].astype(np.float32)

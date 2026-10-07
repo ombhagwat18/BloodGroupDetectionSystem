@@ -3,6 +3,7 @@
 Modes: "model" (real predictions), "demo" (HEMOSCAN_DEMO=1, random output - UI shows a warning),
 "none" (no model file: scans are stored without a prediction).
 """
+import json
 import os
 import threading
 from pathlib import Path
@@ -34,6 +35,14 @@ def _load():
             _error = "Failed to load model: %s" % e
 
 
+def _metrics():
+    f = MODEL_PATH.parent / "metrics.json"
+    try:
+        return json.loads(f.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def mode():
     if MODEL_PATH.exists():
         return "model"
@@ -49,19 +58,25 @@ def info():
         "classes": CLASSES,
         "path": str(MODEL_PATH),
         "error": _error,
-        "input": "64x64x3",
-        "architecture": "VGG-inspired CNN (notebook: ~88% test accuracy on Kaggle dataset)",
+        "input": "%dx%dx3" % (input_size(), input_size()),
+        "architecture": _metrics().get("selected", "unknown") if _model is not None else "no model loaded",
+        "metrics": _metrics(),
     }
 
 
-def predict(x: np.ndarray):
-    """x: (1,64,64,3) float32. Returns dict(predicted, confidence, probs, mode) or None when no model."""
+def input_size():
+    return int(_model.input_shape[1]) if _model is not None else 64
+
+
+def predict(gray: np.ndarray):
+    """gray: uint8 sensor image. Returns dict(predicted, confidence, probs, mode) or None when no model."""
+    from .imaging import to_model_input
     m = mode()
     if m == "model":
         _load()
         if _model is None:
             return None
-        p = _model.predict(x, verbose=0)[0]
+        p = _model.predict(to_model_input(gray, input_size()), verbose=0)[0]
     elif m == "demo":
         p = _rng.dirichlet(np.ones(len(CLASSES)) * 0.6)
     else:

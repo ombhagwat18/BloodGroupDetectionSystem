@@ -127,29 +127,48 @@ Verify everything: `python backend/tests/e2e.py` (14 checks, API + simulator run
 
 ## 🧠 The ML model
 
-* VGG-inspired CNN from the original notebook — 4 conv blocks → dense layers → 8-class softmax (`A+ A- AB+ AB- B+ B- O+ O-`), input 64×64×3.
-* Dataset: 6,000 R-sensor fingerprint BMPs (`ml/data/dataset_blood_group`, git-ignored — see below).
+* CNN based on the original notebook's VGG-inspired network: 4 conv blocks (2 convs each) → dense layers → 8-class softmax (`A+ A- AB+ AB- B+ B- O+ O-`), input 64×64×3.
+* The default is a **lighter version**: half the filter widths (32→256) plus BatchNorm, so it trains on a laptop CPU in well under an hour. `vgg_inspired(widths=(64,128,256,512))` gives the notebook's full size.
+* Training and the live API share the same preprocessing (`backend/app/imaging.py`), so the model sees identical inputs in both.
 
-**Train your own**
+**Train**
 
 ```bash
-python ml/train_model.py --data ml/data/dataset_blood_group --epochs 10
-# → backend/models/fingerprint_model.h5   (restart the API without HEMOSCAN_DEMO)
+python ml/train_model.py --data ml/data/dataset_blood_group --epochs 40
+# → backend/models/fingerprint_model.h5  +  backend/models/metrics.json
 ```
 
-The header pill switches from **DEMO predictions** to **Model loaded**.
+Restart the API without `HEMOSCAN_DEMO`; the header pill switches from **DEMO predictions** to **Model loaded**.
+
+**How the evaluation is kept honest**
+
+| Step | Why |
+|---|---|
+| 15 exact-duplicate images removed *before* splitting | no copy of a test image can be in training |
+| Stratified 70 / 15 / 15 train / val / test split on the **original** images | augmented copies never leak across splits |
+| Augmentation (small shifts, rotation, zoom) on the training set only | the notebook's flips and 90° turns were applied before splitting |
+| Best epoch chosen on validation; test set evaluated once at the end | no tuning on test data |
+| Full per-class report and confusion matrix saved to `metrics.json` | see where it fails |
 
 <details>
-<summary><b>Reference results (from the experiments in <code>ml/notebooks</code>)</b></summary>
+<summary><b>Dataset audit</b></summary>
 
-| Model | Held-out test accuracy |
+6,000 images, all readable, 8 classes: A+ 565 · A− 1,009 · AB+ 708 · AB− 761 · B+ 652 · B− 741 · O+ 852 · O− 712 (imbalanced). 5,956 are 103×96 and 44 are 298×241 (all resized to 64×64). 11 groups of exact duplicates (none across classes). Filenames carry no person ID, so the same person's fingers could appear in both train and test; the test score may therefore be optimistic.
+</details>
+
+<details>
+<summary><b>Reference results from the original notebooks (<code>ml/notebooks</code>)</b></summary>
+
+These are the authors' reported numbers, not produced by this project's training script.
+
+| Model | Reported held-out accuracy |
 |---|---|
-| ResNet50 (transfer learning, 256×256) | ≈ 81 % |
+| ResNet50 (transfer learning, 256×256, 80/20 split on original images) | ≈ 81 % |
 | VGG16 | ≈ 74 % |
-| VGG-inspired from scratch (this project) | ≈ 88 % reported in the notebook¹ |
-| AlexNet / LeNet | did not train well / heavy overfitting |
+| VGG-inspired from scratch (notebook 01) | ≈ 88 %, but augmented copies were split across train and test, which inflates it |
+| AlexNet / LeNet | did not train / heavy overfitting |
 
-¹ That notebook split *augmented* copies of the same images across train and test, which inflates the figure. Re-train with `ml/train_model.py` to get an honest number.
+The pretrained ResNet `.h5` that came with the reference repo was saved with Keras 3 and cannot be loaded by TensorFlow 2.13, so it was removed.
 </details>
 
 ---
@@ -219,7 +238,8 @@ hemoscan/
 - [x] React dashboard (6 pages), patient records, compatibility chart
 - [x] ESP32 simulator
 - [x] ESP32 firmware written
-- [ ] Train and export the real model (`ml/train_model.py`)
+- [x] Dataset audited, de-duplicated, leak-free training pipeline (`ml/train_model.py`)
+- [ ] Final trained model exported and test accuracy published here
 - [ ] Test firmware on real R307 + ESP32 hardware
 - [ ] Collect R307-sensor images with lab labels and fine-tune
 - [ ] User login, roles, HTTPS, encrypted storage
@@ -232,4 +252,4 @@ hemoscan/
 
 ## 📝 Notes
 
-The dataset (`ml/data/`) and trained models are git-ignored because of their size — download the *Finger Print Based Blood Group Dataset* from Kaggle and place the 8 class folders in `ml/data/dataset_blood_group/`. Original reference notebooks keep their upstream licences (`ml/reference/LICENSE`).
+The dataset (`ml/data/`) and trained `.h5` models are git-ignored because of their size — download the *Finger Print Based Blood Group Dataset* from Kaggle and place the 8 class folders in `ml/data/dataset_blood_group/`. Original reference notebooks keep their upstream licences (`ml/reference/LICENSE`).

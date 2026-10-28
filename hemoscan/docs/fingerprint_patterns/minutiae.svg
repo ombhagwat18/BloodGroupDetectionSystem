@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" font-family="Segoe UI, Arial, sans-serif" font-size="14">
+  <title>Fingerprint features: minutiae and singular points</title>
+  <rect width="720" height="300" fill="#ffffff"/>
+  <g fill="none" stroke="#111827" stroke-width="7" stroke-linecap="round">
+    <!-- ridge ending -->
+    <path d="M30 70 H150"/><path d="M30 100 H110"/><path d="M30 130 H150"/>
+    <!-- bifurcation -->
+    <path d="M200 100 H260 C280 100 290 70 330 70 H350"/><path d="M260 100 C280 100 290 130 330 130 H350"/><path d="M200 160 H350"/><path d="M200 40 H350"/>
+    <!-- dot and island -->
+    <path d="M400 70 H540"/><path d="M400 130 H540"/><circle cx="470" cy="100" r="2"/>
+    <path d="M400 160 H430"/><path d="M450 160 H510"/><path d="M530 160 H540"/>
+    <!-- core -->
+    <path d="M590 140 V95 A30 30 0 0 1 650 95 V140"/><path d="M570 140 V95 A50 50 0 0 1 670 95 V140"/><path d="M610 140 V100 A10 10 0 0 1 630 100 V140"/>
+    <!-- delta -->
+    <path d="M90 280 C120 250 140 235 170 230 C200 235 220 250 250 280" transform="translate(0 -10)"/>
+    <path d="M40 210 C90 215 130 215 170 200 C210 215 250 215 300 210" transform="translate(0 -10)"/>
+  </g>
+  <g fill="none" stroke="#dc2626" stroke-width="2.5">
+    <circle cx="110" cy="100" r="14"/><circle cx="260" cy="100" r="14"/><circle cx="470" cy="100" r="12"/>
+    <rect x="440" y="150" width="20" height="20"/><circle cx="620" cy="96" r="14"/><circle cx="170" cy="203" r="14"/>
+  </g>
+  <g fill="#111827" text-anchor="middle">
+    <text x="90" y="25" font-weight="700">Ridge ending</text>
+    <text x="275" y="25" font-weight="700">Bifurcation</text>
+    <text x="470" y="25" font-weight="700">Dot · Short ridge</text>
+    <text x="620" y="25" font-weight="700">Core</text>
+    <text x="170" y="290" font-weight="700">Delta (tri-radius)</text>
+  </g>
+  <g fill="#4b5563" font-size="12.5">
+    <text x="330" y="215">Minutiae (endings, bifurcations, dots) are what the R307</text>
+    <text x="330" y="233">stores as a template to identify a person.</text>
+    <text x="330" y="258">Cores and deltas decide the pattern type: arch = 0 deltas,</text>
+    <text x="330" y="276">loop = 1 core + 1 delta, whorl = 2 deltas.</text>
+  </g>
+</svg>

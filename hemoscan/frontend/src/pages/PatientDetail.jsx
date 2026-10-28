@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Fingerprint, HeartPulse, Pencil, Trash2, TriangleAlert } from 'lucide-react'
-import { api, fmtDate } from '../api'
+import { api, fmtDate, imgUrl } from '../api'
+import { useAuth } from '../auth'
 import { useLive } from '../live'
 import { canDonateTo, canReceiveFrom, ageBand } from '../medical'
 import { Blood, Empty, Modal, StatusPill, Toast } from '../components/ui'
@@ -9,6 +10,7 @@ import ScanResult from '../components/ScanResult'
 import { PatientForm } from './Patients'
 
 export default function PatientDetail() {
+  const { can } = useAuth()
   const { id } = useParams()
   const nav = useNavigate()
   const { device, subscribe } = useLive()
@@ -57,9 +59,9 @@ export default function PatientDetail() {
           <p>{[p.age != null && `${p.age} yrs (${ageBand(p.age)})`, p.sex, p.phone].filter(Boolean).join(' · ') || 'No demographics recorded'}</p>
         </div>
         <div className="row">
-          <button className="btn" onClick={enroll} disabled={!device?.online || enrolling}><Fingerprint size={16} />{p.sensor_slot ? 'Re-enrol fingerprint' : 'Enrol fingerprint'}</button>
-          <button className="btn" onClick={() => setEditing(true)}><Pencil size={16} />Edit</button>
-          <button className="btn danger" onClick={remove}><Trash2 size={16} />Delete</button>
+          {can('scan') && <button className="btn" onClick={enroll} disabled={!device?.online || enrolling}><Fingerprint size={16} />{p.sensor_slot ? 'Re-enrol fingerprint' : 'Enrol fingerprint'}</button>}
+          {can('patientEdit') && <button className="btn" onClick={() => setEditing(true)}><Pencil size={16} />Edit</button>}
+          {can('patientDelete') && <button className="btn danger" onClick={remove}><Trash2 size={16} />Delete</button>}
         </div>
       </div>
 
@@ -103,7 +105,7 @@ export default function PatientDetail() {
             <thead><tr><th></th><th>Predicted</th><th>Confidence</th><th>Confirmed</th><th>Status</th><th>When</th></tr></thead>
             <tbody>{scans.map((s) => (
               <tr key={s.id} className="click" onClick={() => setOpen(s)}>
-                <td><img className="thumb" src={s.image_url} alt="" /></td>
+                <td><img className="thumb" src={imgUrl(s.image_url)} alt="" /></td>
                 <td><Blood group={s.predicted} /></td>
                 <td>{s.confidence != null ? `${(s.confidence * 100).toFixed(0)}%` : '—'}</td>
                 <td><Blood group={s.confirmed_group} /></td>

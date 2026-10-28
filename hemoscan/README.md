@@ -34,6 +34,7 @@
 | ✅ **Lab-confirmation workflow** | Every prediction must be confirmed or rejected against a lab result; the dashboard tracks model-vs-lab agreement |
 | 📊 **Analytics** | Scans per day, patients by blood group, pending reviews, model agreement |
 | 🔌 **Hardware simulator** | Develop and test the full stack with no ESP32 or sensor attached |
+| 🔐 **Login & roles** | Admin, doctor, lab technician and operator accounts; each role sees only the tabs and buttons it may use, and the API enforces it |
 | 🎨 **Clean UI** | White-and-blue responsive dashboard, live device / model status in the header |
 
 <details>
@@ -118,6 +119,8 @@ npm install
 npm run dev                     # → http://localhost:5173
 ```
 
+On the very first visit the dashboard asks you to **create the admin account**; add the other users under **Users**.
+
 Then: **Patients → Add → Enrol fingerprint**, **Live Scan → Start capture**, **Confirm** the result.
 
 Single-process mode: `npm run build` once, then open `http://localhost:8000`. API docs at `/docs`.
@@ -139,6 +142,10 @@ python ml/train_model.py --data ml/data/dataset_blood_group --epochs 40
 ```
 
 Restart the API without `HEMOSCAN_DEMO`; the header pill switches from **DEMO predictions** to **Model loaded**.
+
+Or train from the dashboard: **Models & Training → Train all models**. The page draws each model's validation
+accuracy live after every epoch, then shows the comparison, per-class scores and confusion matrix. The new
+model is served without restarting the API.
 
 **How the evaluation is kept honest**
 
@@ -204,7 +211,12 @@ hemoscan/
 ├── frontend/              React + Vite dashboard (pages/ · components/)
 ├── firmware/              hemoscan_esp32/hemoscan_esp32.ino
 ├── ml/                    train_model.py · notebooks/ · data/ · reference/
-└── docs/screenshots/
+├── docs/
+│   ├── PROJECT_REPORT.md  system check, models, datasets, roadmap
+│   ├── architecture/      10 Mermaid diagrams (system, sequence, ML pipeline, DB, setup…)
+│   ├── fingerprint_patterns/  arch / loop / whorl images + dataset samples per blood group
+│   └── screenshots/
+└── start_hemoscan.bat     one-click setup: installs Python 3.11 / Node LTS if missing, then starts
 ```
 
 <details>
@@ -215,6 +227,7 @@ hemoscan/
 | `GET/POST /api/patients` · `GET/PUT/DELETE /api/patients/{id}` | dashboard |
 | `GET /api/scans` · `PATCH/DELETE /api/scans/{id}` · `POST /api/scans/upload` | dashboard |
 | `GET /api/stats` · `/api/model` · `/api/devices` · `POST /api/commands` | dashboard |
+| `GET /api/training` · `POST /api/training/start` · `POST /api/training/stop` | Models & Training page |
 | `POST /api/device/heartbeat` · `GET /api/device/poll` · `POST /api/device/event` · `POST /api/device/scan` · `POST /api/device/enroll_result` | ESP32 (header `X-Device-Key`) |
 | `WS /ws` | live updates |
 </details>
@@ -227,6 +240,7 @@ hemoscan/
 | `HEMOSCAN_DEMO` | unset | `1` = random demo predictions when no model file exists |
 | `HEMOSCAN_MODEL` | `backend/models/fingerprint_model.h5` | model path |
 | `HEMOSCAN_DATA` | `backend/data` | database + scan images |
+| `HEMOSCAN_SECRET` | generated into `backend/data/secret.key` | signs login tokens — set it if you run several API processes |
 | `HEMOSCAN_DEVICE_KEY` | `hemoscan-dev-key` | shared secret sent by the ESP32 — change it together with `DEVICE_KEY` in the firmware |
 </details>
 
@@ -242,13 +256,14 @@ hemoscan/
 - [ ] Final trained model exported and test accuracy published here
 - [ ] Test firmware on real R307 + ESP32 hardware
 - [ ] Collect R307-sensor images with lab labels and fine-tune
-- [ ] User login, roles, HTTPS, encrypted storage
+- [x] User login and roles (admin / doctor / lab technician / operator)
+- [ ] HTTPS, encrypted storage, per-device secrets
 
 ## ⚠️ Limitations & safety
 
 * The reference dataset comes from a different scanner than the R307; **expect lower accuracy on real R307 images.** The app measures real agreement with lab results so you can see it.
 * Low-confidence and low-quality scans are flagged; nothing is treated as a diagnosis.
-* **Privacy:** patient data is stored unencrypted in `backend/data/hemoscan.db` and there is **no login**. Do not use with real patient data on a shared network until authentication and HTTPS are added.
+* **Privacy:** the dashboard and API now require a login, but patient data is still stored **unencrypted** in `backend/data/hemoscan.db` and traffic is plain **HTTP** (login tokens travel unencrypted on the network). Do not use real patient data outside a trusted network until HTTPS and encryption are added.
 
 ## 📝 Notes
 

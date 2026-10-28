@@ -1,9 +1,22 @@
+const TOKEN_KEY = 'hemoscan_token'
+export const getToken = () => { try { return localStorage.getItem(TOKEN_KEY) } catch { return null } }
+export const setToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch { /* private mode */ } }
+/** <img> tags cannot send headers, so scan images carry the token in the URL. */
+export const imgUrl = (u) => (u && getToken() ? `${u}?token=${encodeURIComponent(getToken())}` : u)
+
 async function req(method, url, body, isForm) {
+  const headers = body && !isForm ? { 'Content-Type': 'application/json' } : {}
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
   const res = await fetch(url, {
     method,
-    headers: body && !isForm ? { 'Content-Type': 'application/json' } : undefined,
+    headers,
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
   })
+  if (res.status === 401 && token) {  // expired or revoked session -> back to the login screen
+    setToken(null)
+    window.dispatchEvent(new Event('hemoscan-logout'))
+  }
   if (!res.ok) {
     let msg = res.statusText
     try {
@@ -16,8 +29,20 @@ async function req(method, url, body, isForm) {
 }
 
 export const api = {
+  authStatus: () => req('GET', '/api/auth/status'),
+  setup: (b) => req('POST', '/api/auth/setup', b),
+  login: (b) => req('POST', '/api/auth/login', b),
+  me: () => req('GET', '/api/auth/me'),
+  changePassword: (b) => req('POST', '/api/auth/password', b),
+  users: () => req('GET', '/api/users'),
+  createUser: (b) => req('POST', '/api/users', b),
+  updateUser: (id, b) => req('PATCH', `/api/users/${id}`, b),
+  deleteUser: (id) => req('DELETE', `/api/users/${id}`),
   stats: () => req('GET', '/api/stats'),
   model: () => req('GET', '/api/model'),
+  training: () => req('GET', '/api/training'),
+  startTraining: (b) => req('POST', '/api/training/start', b),
+  stopTraining: () => req('POST', '/api/training/stop'),
   devices: () => req('GET', '/api/devices'),
   commands: () => req('GET', '/api/commands'),
   sendCommand: (c) => req('POST', '/api/commands', c),

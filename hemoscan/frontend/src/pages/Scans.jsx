@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Trash2 } from 'lucide-react'
-import { api, fmtDate } from '../api'
+import { api, fmtDate, imgUrl } from '../api'
+import { useAuth } from '../auth'
 import { useLive } from '../live'
 import { Blood, Empty, Modal, StatusPill } from '../components/ui'
 import ScanResult from '../components/ScanResult'
@@ -9,6 +10,7 @@ import ScanResult from '../components/ScanResult'
 const TABS = [['', 'All'], ['pending', 'Needs review'], ['confirmed', 'Confirmed'], ['rejected', 'Rejected']]
 
 export default function Scans() {
+  const { can } = useAuth()
   const [tab, setTab] = useState('')
   const [list, setList] = useState(null)
   const [open, setOpen] = useState(null)
@@ -37,7 +39,7 @@ export default function Scans() {
             <thead><tr><th></th><th>#</th><th>Patient</th><th>Predicted</th><th>Confidence</th><th>Quality</th><th>Confirmed</th><th>Status</th><th>When</th><th></th></tr></thead>
             <tbody>{list.map((s) => (
               <tr key={s.id} className="click" onClick={() => setOpen(s)}>
-                <td><img className="thumb" src={s.image_url} alt="" /></td>
+                <td><img className="thumb" src={imgUrl(s.image_url)} alt="" /></td>
                 <td className="muted">{s.id}</td>
                 <td>{s.patient_name || <span className="muted">Unassigned</span>}</td>
                 <td><Blood group={s.predicted} /></td>
@@ -46,7 +48,7 @@ export default function Scans() {
                 <td><Blood group={s.confirmed_group} /></td>
                 <td><StatusPill status={s.status} /></td>
                 <td className="muted">{fmtDate(s.created_at)}</td>
-                <td><button className="btn sm danger" onClick={(e) => del(e, s)} aria-label="Delete scan"><Trash2 size={14} /></button></td>
+                <td>{can('scanDelete') && <button className="btn sm danger" onClick={(e) => del(e, s)} aria-label="Delete scan"><Trash2 size={14} /></button>}</td>
               </tr>))}</tbody>
           </table></div>
         )}

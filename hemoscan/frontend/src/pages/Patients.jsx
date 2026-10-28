@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Fingerprint, Plus, Search } from 'lucide-react'
 import { api, GROUPS } from '../api'
+import { useAuth } from '../auth'
 import { Blood, Empty, Field, Modal } from '../components/ui'
 
 export const EMPTY = { name: '', age: '', sex: '', phone: '', blood_group: '', allergies: '', conditions: '', notes: '' }
@@ -36,6 +37,7 @@ export function PatientForm({ initial, onSaved, onClose }) {
 }
 
 export default function Patients() {
+  const { can } = useAuth()
   const [list, setList] = useState(null)
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState(false)
@@ -47,7 +49,7 @@ export default function Patients() {
     <>
       <div className="page-head">
         <div><h1>Patients</h1><p>Medical records linked to fingerprints enrolled on the sensor.</p></div>
-        <button className="btn primary" onClick={() => setAdding(true)}><Plus size={16} />Add patient</button>
+        {can('patientCreate') && <button className="btn primary" onClick={() => setAdding(true)}><Plus size={16} />Add patient</button>}
       </div>
       <div className="card">
         <div className="row" style={{ marginBottom: 12 }}>

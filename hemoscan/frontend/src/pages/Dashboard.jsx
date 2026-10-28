@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ClipboardCheck, Fingerprint, Target, Users } from 'lucide-react'
-import { api, fmtDate } from '../api'
+import { api, fmtDate, imgUrl } from '../api'
 import { useLive } from '../live'
 import { Blood, Empty, StatusPill } from '../components/ui'
 
@@ -85,7 +85,7 @@ export default function Dashboard() {
             <tbody>
               {recent.map((s) => (
                 <tr key={s.id} className="click" onClick={() => nav('/scans', { state: { open: s.id } })}>
-                  <td><img className="thumb" src={s.image_url} alt="" /></td>
+                  <td><img className="thumb" src={imgUrl(s.image_url)} alt="" /></td>
                   <td>{s.patient_name || <span className="muted">Unassigned</span>}</td>
                   <td><Blood group={s.predicted} /></td>
                   <td>{s.confidence != null ? `${(s.confidence * 100).toFixed(0)}%` : '—'}</td>

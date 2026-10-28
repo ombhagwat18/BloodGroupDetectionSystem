@@ -35,6 +35,13 @@ def _load():
             _error = "Failed to load model: %s" % e
 
 
+def reset():
+    """Forget the loaded model so the next call loads the freshly trained file."""
+    global _model, _error
+    with _lock:
+        _model, _error = None, None
+
+
 def _metrics():
     f = MODEL_PATH.parent / "metrics.json"
     try:

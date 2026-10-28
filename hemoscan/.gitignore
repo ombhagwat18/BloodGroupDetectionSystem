@@ -4,8 +4,12 @@ __pycache__/
 *.pyc
 backend/data/
 backend/models/*.h5
+backend/models/training_progress.json
+backend/models/training.log
 ml/data/dataset_blood_group/
 ml/reference/pretrained/*.h5
 .env
 .vscode/
 .ipynb_checkpoints/
+
+.venv/

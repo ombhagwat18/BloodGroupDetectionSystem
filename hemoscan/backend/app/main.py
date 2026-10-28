@@ -1,6 +1,8 @@
 """HemoScan API: patients, scans, ESP32 device endpoints, live WebSocket feed."""
 import json
 import os
+import subprocess
+import sys
 import time
 from collections import Counter
 from datetime import datetime
@@ -14,7 +16,8 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, imaging, ml
+from . import auth, db, imaging, ml
+from .auth import require
 from .hub import hub
 
 DEVICE_KEY = os.environ.get("HEMOSCAN_DEVICE_KEY", "hemoscan-dev-key")
@@ -24,7 +27,13 @@ MAX_SLOT = 200
 GROUPS = ml.CLASSES
 
 app = FastAPI(title="HemoScan API", version="1.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# the built dashboard is served from this same origin; only the Vite dev server needs CORS
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+                   allow_methods=["*"], allow_headers=["*"])
+
+ANY = [Depends(require())]  # any signed-in user
+STAFF = ("admin", "doctor", "operator")  # may register patients, scan and enrol
+REVIEWERS = ("admin", "doctor", "lab_tech")  # may confirm / reject a prediction against the lab result
 
 
 @app.on_event("startup")
@@ -91,15 +100,212 @@ def _check_group(g):
         raise HTTPException(422, "blood group must be one of %s" % GROUPS)
 
 
+# ----------------------------------------------------------------------------- login & users
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+class UserIn(BaseModel):
+    username: str = Field(min_length=3, max_length=40)
+    full_name: str = Field("", max_length=120)
+    role: str
+    password: str = Field(min_length=auth.MIN_PASSWORD, max_length=200)
+
+
+class UserPatch(BaseModel):
+    full_name: Optional[str] = Field(None, max_length=120)
+    role: Optional[str] = None
+    active: Optional[bool] = None
+    password: Optional[str] = Field(None, min_length=auth.MIN_PASSWORD, max_length=200)
+
+
+class PasswordIn(BaseModel):
+    current: str
+    new: str = Field(min_length=auth.MIN_PASSWORD, max_length=200)
+
+
+def _check_username(name):
+    if not all(ch.isalnum() or ch in "_.-" for ch in name) or not name.isascii():
+        raise HTTPException(422, "username may only contain letters, digits, _ . -")
+
+
+def _check_role(role):
+    if role not in auth.ROLES:
+        raise HTTPException(422, "role must be one of %s" % (auth.ROLES,))
+
+
+def _login_response(c, u):
+    c.execute("UPDATE users SET last_login=? WHERE id=?", (db.now(), u["id"]))
+    return {"token": auth.make_token(u["id"]), "user": auth.public(u)}
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    return {"needs_setup": auth.user_count() == 0}
+
+
+@app.post("/api/auth/setup", status_code=201)
+def auth_setup(b: UserIn):
+    """Creates the first admin. Only works while there are no users at all."""
+    _check_username(b.username)
+    with db.conn() as c:
+        if c.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+            raise HTTPException(409, "setup already done")
+        cur = c.execute("INSERT INTO users(username,full_name,role,password_hash,created_at) VALUES(?,?,?,?,?)",
+                        (b.username, b.full_name.strip(), "admin", auth.hash_password(b.password), db.now()))
+        return _login_response(c, db.row(c.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()))
+
+
+@app.post("/api/auth/login")
+def auth_login(b: LoginIn):
+    with db.conn() as c:
+        u = db.row(c.execute("SELECT * FROM users WHERE username=?", (b.username.strip(),)).fetchone())
+        # same message for unknown user / wrong password / disabled account
+        if not u or not u["active"] or not auth.verify_password(b.password, u["password_hash"]):
+            raise HTTPException(401, "wrong username or password")
+        return _login_response(c, u)
+
+
+@app.get("/api/auth/me")
+def auth_me(user=Depends(require())):
+    return auth.public(user)
+
+
+@app.post("/api/auth/password")
+def auth_password(b: PasswordIn, user=Depends(require())):
+    if not auth.verify_password(b.current, user["password_hash"]):
+        raise HTTPException(403, "current password is wrong")
+    with db.conn() as c:
+        c.execute("UPDATE users SET password_hash=? WHERE id=?", (auth.hash_password(b.new), user["id"]))
+    return {"ok": True}
+
+
+@app.get("/api/users", dependencies=[Depends(require("admin"))])
+def list_users():
+    with db.conn() as c:
+        return [auth.public(r) for r in c.execute("SELECT * FROM users ORDER BY id")]
+
+
+@app.post("/api/users", status_code=201, dependencies=[Depends(require("admin"))])
+def create_user(b: UserIn):
+    _check_role(b.role)
+    _check_username(b.username)
+    with db.conn() as c:
+        if c.execute("SELECT 1 FROM users WHERE username=?", (b.username,)).fetchone():
+            raise HTTPException(409, "username already taken")
+        cur = c.execute("INSERT INTO users(username,full_name,role,password_hash,created_at) VALUES(?,?,?,?,?)",
+                        (b.username, b.full_name.strip(), b.role, auth.hash_password(b.password), db.now()))
+        return auth.public(c.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+@app.patch("/api/users/{uid}")
+def update_user(uid: int, b: UserPatch, admin=Depends(require("admin"))):
+    if b.role is not None:
+        _check_role(b.role)
+    with db.conn() as c:
+        u = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not u:
+            raise HTTPException(404, "user not found")
+        # never leave the system without an active admin (or lock yourself out)
+        losing_admin = u["role"] == "admin" and u["active"] and (
+            (b.role is not None and b.role != "admin") or b.active is False)
+        if losing_admin and auth.active_admins(c) <= 1:
+            raise HTTPException(409, "at least one active admin is required")
+        if uid == admin["id"] and b.active is False:
+            raise HTTPException(409, "you cannot disable your own account")
+        if b.full_name is not None:
+            c.execute("UPDATE users SET full_name=? WHERE id=?", (b.full_name.strip(), uid))
+        if b.role is not None:
+            c.execute("UPDATE users SET role=? WHERE id=?", (b.role, uid))
+        if b.active is not None:
+            c.execute("UPDATE users SET active=? WHERE id=?", (int(b.active), uid))
+        if b.password is not None:
+            c.execute("UPDATE users SET password_hash=? WHERE id=?", (auth.hash_password(b.password), uid))
+        return auth.public(c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
+
+
+@app.delete("/api/users/{uid}")
+def delete_user(uid: int, admin=Depends(require("admin"))):
+    with db.conn() as c:
+        u = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not u:
+            raise HTTPException(404, "user not found")
+        if uid == admin["id"]:
+            raise HTTPException(409, "you cannot delete your own account")
+        if u["role"] == "admin" and u["active"] and auth.active_admins(c) <= 1:
+            raise HTTPException(409, "at least one active admin is required")
+        c.execute("DELETE FROM users WHERE id=?", (uid,))
+    return {"ok": True}
+
+
 # ----------------------------------------------------------------------------- health / model
 @app.get("/api/health")
 def health():
     return {"ok": True, "model": ml.info()["mode"], "time": db.now()}
 
 
-@app.get("/api/model")
+@app.get("/api/model", dependencies=ANY)
 def model_info():
     return ml.info()
+
+
+# ----------------------------------------------------------------------------- training (live progress for the Models page)
+ROOT = Path(__file__).resolve().parents[2]
+DATASET = ROOT / "ml" / "data" / "dataset_blood_group"
+PROGRESS_FILE = ml.MODEL_PATH.parent / "training_progress.json"
+TRAIN_LOG = ml.MODEL_PATH.parent / "training.log"
+_train = {"proc": None, "reloaded": True}
+
+
+class TrainIn(BaseModel):
+    models: str = "vgg_light,resnet_small,mobilenetv2_transfer,resnet50_transfer"
+    epochs: int = Field(25, ge=1, le=100)
+
+
+def _running():
+    p = _train["proc"]
+    return p is not None and p.poll() is None
+
+
+@app.get("/api/training", dependencies=ANY)
+def training_status():
+    p = _train["proc"]
+    if p is not None and p.poll() == 0 and not _train["reloaded"]:
+        ml.reset()  # serve the new model without restarting the API
+        _train["reloaded"] = True
+    try:
+        progress = json.loads(PROGRESS_FILE.read_text())
+    except Exception:  # noqa: BLE001
+        progress = None
+    if progress and progress.get("status") in ("starting", "running") and not _running():
+        progress["status"] = "stopped"  # process died or the API restarted mid-run
+    log = TRAIN_LOG.read_text(errors="replace").splitlines()[-15:] if TRAIN_LOG.exists() else []
+    return {"running": _running(), "dataset_found": DATASET.exists(), "progress": progress,
+            "log": log, "metrics": ml.info()["metrics"]}
+
+
+@app.post("/api/training/start", status_code=202, dependencies=[Depends(require("admin"))])
+def training_start(body: TrainIn):
+    if _running():
+        raise HTTPException(409, "training is already running")
+    if not DATASET.exists():
+        raise HTTPException(409, "dataset not found in %s" % DATASET)
+    PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    log = open(TRAIN_LOG, "w", encoding="utf-8")
+    _train["proc"] = subprocess.Popen(
+        [sys.executable, "-u", str(ROOT / "ml" / "train_model.py"), "--models", body.models, "--epochs", str(body.epochs)],
+        cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
+    log.close()  # the child keeps its own handle
+    _train["reloaded"] = False
+    return {"ok": True, "pid": _train["proc"].pid}
+
+
+@app.post("/api/training/stop", dependencies=[Depends(require("admin"))])
+def training_stop():
+    if _running():
+        _train["proc"].terminate()
+    return {"ok": True}
 
 
 # ----------------------------------------------------------------------------- patients
@@ -110,7 +316,7 @@ def _patient(c, pid):
     return db.row(r)
 
 
-@app.get("/api/patients")
+@app.get("/api/patients", dependencies=ANY)
 def list_patients(q: str = ""):
     with db.conn() as c:
         sql = ("SELECT p.*, (SELECT COUNT(*) FROM scans s WHERE s.patient_id=p.id) AS scan_count "
@@ -122,7 +328,7 @@ def list_patients(q: str = ""):
         return [db.row(r) for r in c.execute(sql + " ORDER BY p.id DESC", args)]
 
 
-@app.post("/api/patients", status_code=201)
+@app.post("/api/patients", status_code=201, dependencies=[Depends(require(*STAFF))])
 def create_patient(p: PatientIn):
     _check_group(p.blood_group or None)
     with db.conn() as c:
@@ -135,13 +341,13 @@ def create_patient(p: PatientIn):
         return _patient(c, pid)
 
 
-@app.get("/api/patients/{pid}")
+@app.get("/api/patients/{pid}", dependencies=ANY)
 def get_patient(pid: int):
     with db.conn() as c:
         return _patient(c, pid)
 
 
-@app.put("/api/patients/{pid}")
+@app.put("/api/patients/{pid}", dependencies=[Depends(require("admin", "doctor"))])
 def update_patient(pid: int, p: PatientIn):
     _check_group(p.blood_group or None)
     with db.conn() as c:
@@ -151,7 +357,7 @@ def update_patient(pid: int, p: PatientIn):
         return _patient(c, pid)
 
 
-@app.delete("/api/patients/{pid}")
+@app.delete("/api/patients/{pid}", dependencies=[Depends(require("admin"))])
 def delete_patient(pid: int):
     with db.conn() as c:
         p = _patient(c, pid)
@@ -161,7 +367,7 @@ def delete_patient(pid: int):
     return {"ok": True}
 
 
-@app.get("/api/patients/{pid}/scans")
+@app.get("/api/patients/{pid}/scans", dependencies=ANY)
 def patient_scans(pid: int):
     with db.conn() as c:
         _patient(c, pid)
@@ -177,7 +383,7 @@ def _scan_full(c, sid):
     return db.scan_dict(r)
 
 
-@app.get("/api/scans")
+@app.get("/api/scans", dependencies=ANY)
 def list_scans(status: Optional[str] = None, patient_id: Optional[int] = None, limit: int = 200):
     sql = ("SELECT s.*, p.name AS patient_name, p.code AS patient_code FROM scans s "
            "LEFT JOIN patients p ON p.id=s.patient_id WHERE 1=1")
@@ -192,13 +398,13 @@ def list_scans(status: Optional[str] = None, patient_id: Optional[int] = None, l
         return [db.scan_dict(r) for r in c.execute(sql + " ORDER BY s.id DESC LIMIT ?", args + [limit])]
 
 
-@app.get("/api/scans/{sid}")
+@app.get("/api/scans/{sid}", dependencies=ANY)
 def get_scan(sid: int):
     with db.conn() as c:
         return _scan_full(c, sid)
 
 
-@app.get("/api/scans/{sid}/image")
+@app.get("/api/scans/{sid}/image", dependencies=ANY)
 def scan_image(sid: int):
     f = db.IMG_DIR / ("%d.png" % sid)
     if not f.exists():
@@ -207,10 +413,14 @@ def scan_image(sid: int):
 
 
 @app.patch("/api/scans/{sid}")
-def patch_scan(sid: int, body: ScanPatch):
+def patch_scan(sid: int, body: ScanPatch, user=Depends(require())):
     _check_group(body.confirmed_group)
     if body.status and body.status not in ("pending", "confirmed", "rejected"):
         raise HTTPException(422, "bad status")
+    reviewing = bool(body.confirmed_group or body.status)
+    assigning = bool(body.unassign or body.patient_id is not None)
+    if (reviewing and user["role"] not in REVIEWERS) or (assigning and user["role"] not in ("admin", "doctor")):
+        raise HTTPException(403, "your role (%s) is not allowed to do this" % user["role"])
     with db.conn() as c:
         _scan_full(c, sid)
         if body.unassign:
@@ -222,6 +432,8 @@ def patch_scan(sid: int, body: ScanPatch):
             c.execute("UPDATE scans SET confirmed_group=?, status='confirmed' WHERE id=?", (body.confirmed_group, sid))
         if body.status:
             c.execute("UPDATE scans SET status=? WHERE id=?", (body.status, sid))
+        if reviewing:
+            c.execute("UPDATE scans SET confirmed_by=? WHERE id=?", (user["username"], sid))
         s = _scan_full(c, sid)
         # a lab-confirmed group fills an empty patient record (never overwrites an existing one)
         if s["status"] == "confirmed" and s["confirmed_group"] and s["patient_id"]:
@@ -230,7 +442,7 @@ def patch_scan(sid: int, body: ScanPatch):
         return s
 
 
-@app.delete("/api/scans/{sid}")
+@app.delete("/api/scans/{sid}", dependencies=[Depends(require("admin"))])
 def delete_scan(sid: int):
     with db.conn() as c:
         _scan_full(c, sid)
@@ -265,7 +477,7 @@ async def _ingest(gray, device_id, patient_id=None, slot=None, score=None, comma
     return scan
 
 
-@app.post("/api/scans/upload", status_code=201)
+@app.post("/api/scans/upload", status_code=201, dependencies=[Depends(require(*STAFF))])
 async def upload_scan(file: UploadFile = File(...), patient_id: Optional[int] = None):
     """Manual upload (bitmap/PNG) - lets you use the dashboard without the ESP32."""
     try:
@@ -276,7 +488,7 @@ async def upload_scan(file: UploadFile = File(...), patient_id: Optional[int] = 
 
 
 # ----------------------------------------------------------------------------- dashboard stats
-@app.get("/api/stats")
+@app.get("/api/stats", dependencies=ANY)
 def stats():
     with db.conn() as c:
         patients = c.execute("SELECT COUNT(*) FROM patients").fetchone()[0]
@@ -322,7 +534,7 @@ def _free_slot(c):
     raise HTTPException(409, "sensor memory full")
 
 
-@app.get("/api/devices")
+@app.get("/api/devices", dependencies=ANY)
 def devices():
     with db.conn() as c:
         out = []
@@ -334,7 +546,7 @@ def devices():
         return out
 
 
-@app.post("/api/commands", status_code=201)
+@app.post("/api/commands", status_code=201, dependencies=[Depends(require(*STAFF))])
 async def send_command(cmd: CommandIn):
     if cmd.type not in ("capture", "enroll", "cancel"):
         raise HTTPException(422, "unknown command type")
@@ -353,7 +565,7 @@ async def send_command(cmd: CommandIn):
     return {"id": cid, "type": cmd.type, "payload": payload, "status": "queued"}
 
 
-@app.get("/api/commands")
+@app.get("/api/commands", dependencies=ANY)
 def list_commands(limit: int = 20):
     with db.conn() as c:
         return [dict(r) for r in c.execute("SELECT * FROM commands ORDER BY id DESC LIMIT ?", (limit,))]
@@ -431,7 +643,10 @@ async def enroll_result(r: EnrollResult):
 
 # ----------------------------------------------------------------------------- websocket
 @app.websocket("/ws")
-async def ws_endpoint(ws: WebSocket):
+async def ws_endpoint(ws: WebSocket, token: Optional[str] = None):
+    if not auth.user_from_token(token):
+        await ws.close(code=4401)  # not signed in
+        return
     await hub.connect(ws)
     try:
         while True:

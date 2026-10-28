@@ -59,6 +59,16 @@ CREATE TABLE IF NOT EXISTS commands (
     result TEXT,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    full_name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL,
+    last_login REAL
+);
 CREATE INDEX IF NOT EXISTS idx_scans_patient ON scans(patient_id);
 CREATE INDEX IF NOT EXISTS idx_scans_created ON scans(created_at);
 """
@@ -69,6 +79,9 @@ def init():
     IMG_DIR.mkdir(parents=True, exist_ok=True)
     with conn() as c:
         c.executescript(SCHEMA)
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(scans)")}
+        if "confirmed_by" not in cols:  # older databases: who confirmed the lab result
+            c.execute("ALTER TABLE scans ADD COLUMN confirmed_by TEXT")
 
 
 @contextmanager

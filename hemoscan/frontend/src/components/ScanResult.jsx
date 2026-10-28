@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { CheckCircle2, TriangleAlert, XCircle, UserRound } from 'lucide-react'
-import { api, GROUPS, fmtDate } from '../api'
+import { api, GROUPS, fmtDate, imgUrl } from '../api'
+import { useAuth } from '../auth'
 import { Blood, ProbBars, StatusPill } from './ui'
 
 /** Image + prediction + review actions for one scan. onChange(scan) fires after any edit. */
@@ -10,6 +11,7 @@ export default function ScanResult({ scan: initial, onChange }) {
   const [patients, setPatients] = useState([])
   const [group, setGroup] = useState(initial.confirmed_group || initial.predicted || 'O+')
   const [err, setErr] = useState('')
+  const { can } = useAuth()
 
   useEffect(() => { setScan(initial); setGroup(initial.confirmed_group || initial.predicted || 'O+') }, [initial])
   useEffect(() => { api.patients().then(setPatients).catch(() => {}) }, [])
@@ -26,7 +28,7 @@ export default function ScanResult({ scan: initial, onChange }) {
   const low = scan.confidence != null && scan.confidence < 0.6
   return (
     <div className="grid" style={{ gridTemplateColumns: 'minmax(160px, 220px) 1fr', alignItems: 'start' }}>
-      <div className="fp-box"><img src={scan.image_url} alt="fingerprint" /></div>
+      <div className="fp-box"><img src={imgUrl(scan.image_url)} alt="fingerprint" /></div>
       <div>
         <div className="row" style={{ marginBottom: 10 }}>
           <StatusPill status={scan.status} />
@@ -60,7 +62,7 @@ export default function ScanResult({ scan: initial, onChange }) {
         <div className="field">
           <label><UserRound size={12} style={{ verticalAlign: -1 }} /> Patient</label>
           <div className="row">
-            <select style={{ flex: 1, minWidth: 160 }} value={scan.patient_id || ''} onChange={(e) => e.target.value ? patch({ patient_id: +e.target.value }) : patch({ unassign: true })}>
+            <select disabled={!can('assign')} style={{ flex: 1, minWidth: 160 }} value={scan.patient_id || ''} onChange={(e) => e.target.value ? patch({ patient_id: +e.target.value }) : patch({ unassign: true })}>
               <option value="">— Unassigned —</option>
               {patients.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}
             </select>
@@ -68,6 +70,7 @@ export default function ScanResult({ scan: initial, onChange }) {
           </div>
         </div>
 
+        {can('review') ? (
         <div className="field">
           <label>Lab-confirmed blood group</label>
           <div className="row">
@@ -78,6 +81,7 @@ export default function ScanResult({ scan: initial, onChange }) {
             <button className="btn danger" onClick={() => patch({ status: 'rejected' })}><XCircle size={16} />Reject scan</button>
           </div>
         </div>
+        ) : <div className="banner">Only doctors, lab technicians and admins can confirm a result against the lab report.</div>}
         {err && <div className="banner bad">{err}</div>}
       </div>
     </div>

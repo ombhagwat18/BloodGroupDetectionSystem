@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react'
-import { api } from './api'
+import { api, getToken } from './api'
 
 const Ctx = createContext(null)
 export const useLive = () => useContext(Ctx)
@@ -28,7 +28,7 @@ export function LiveProvider({ children }) {
   useEffect(() => {
     let ws, retry, closed = false
     const open = () => {
-      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`)
+      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?token=${encodeURIComponent(getToken() || '')}`)
       let ka
       ws.onopen = () => {
         setConnected(true)

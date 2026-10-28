@@ -34,6 +34,31 @@ from app.ml import CLASSES  # noqa: E402
 
 N = len(CLASSES)
 IMAGENET_MEAN = [103.939, 116.779, 123.68]  # Keras ResNet50 / caffe-style, BGR (our 3 channels are identical)
+PROGRESS_PATH = ROOT / "backend" / "models" / "training_progress.json"  # read by GET /api/training (live dashboard graph)
+PROGRESS = {"status": "starting", "started": time.time(), "current": None, "stage": "loading images", "models": {}}
+
+
+def save_progress(**kw):
+    PROGRESS.update(kw, updated=time.time())
+    PROGRESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PROGRESS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(PROGRESS))
+    os.replace(tmp, PROGRESS_PATH)  # atomic, so the API never reads half a file
+
+
+class ProgressLogger(tf.keras.callbacks.Callback):
+    """Appends each epoch's accuracy/loss to training_progress.json."""
+
+    def __init__(self, name, max_epochs):
+        super().__init__()
+        self.name = name
+        PROGRESS["models"][name] = {"max_epochs": max_epochs, "epochs": [], "done": False}
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        PROGRESS["models"][self.name]["epochs"].append(
+            {"epoch": epoch + 1, **{k: round(float(logs[k]), 4) for k in ("accuracy", "val_accuracy", "loss", "val_loss") if k in logs}})
+        save_progress(stage="training %s - epoch %d" % (self.name, epoch + 1))
 
 
 # ----------------------------------------------------------------------------- data
@@ -154,9 +179,11 @@ def train_keras(name, grays, split, epochs_cap, batch):
     model.compile(optimizer=tf.keras.optimizers.Adam(5e-4 if "transfer" not in name else 1e-3),
                   loss="categorical_crossentropy", metrics=["accuracy"])
     t0 = time.time()
+    save_progress(current=name, stage="training %s" % name)
     hist = model.fit(train, validation_data=val, epochs=min(max_ep, epochs_cap), verbose=2, callbacks=[
         tf.keras.callbacks.EarlyStopping(monitor="val_accuracy", patience=6, restore_best_weights=True),
-        tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=3)])
+        tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=3),
+        ProgressLogger(name, min(max_ep, epochs_cap))])
     secs = time.time() - t0
     res = {"description": desc, "input_size": size, "deployable": True, "params": int(model.count_params()),
            "train_seconds": round(secs), "epochs_run": len(hist.history["loss"]),
@@ -228,7 +255,15 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "backend" / "models" / "fingerprint_model.h5"))
     a = ap.parse_args()
     np.random.seed(42)
+    try:
+        run(a)
+    except BaseException as e:
+        save_progress(status="failed", stage="failed: %s" % (str(e) or type(e).__name__))
+        raise
 
+
+def run(a):
+    save_progress()
     grays, y = load_grays(a.data)
     idx = np.arange(len(y))
     tr, tmp = train_test_split(idx, test_size=0.30, stratify=y, random_state=42)
@@ -237,13 +272,16 @@ def main():
     print("train %d  val %d  test %d" % (len(tr), len(va), len(te)))
 
     results, best = {}, (None, -1.0, None)
+    save_progress(status="running", split={"train": len(tr), "val": len(va), "test": len(te)})
     if not a.no_baselines:
+        save_progress(stage="baselines (majority class, HOG + SVM)")
         results.update(baselines(grays, split))
     for name in a.models.split(","):
         print("\n=== %s ===" % name)
         res, model = train_keras(name, grays, split, a.epochs, a.batch)
         results[name] = res
-        res["val_accuracy"] = res["val_accuracy"]
+        PROGRESS["models"][name].update(done=True, val_accuracy=res["val_accuracy"], test_accuracy=res["test"]["accuracy"])
+        save_progress()
         print("%s: val %.3f  test %.3f  macroF1 %.3f" % (name, res["val_accuracy"], res["test"]["accuracy"], res["test"]["macro_f1"]))
         if res["val_accuracy"] > best[1]:
             best = (name, res["val_accuracy"], model)
@@ -261,6 +299,7 @@ def main():
                "test": results[name]["test"], "input_size": results[name]["input_size"], "candidates": results}
     (out.parent / "metrics.json").write_text(json.dumps(metrics, indent=2))
     chart(results, name, ROOT / "docs" / "model_comparison.png")
+    save_progress(status="done", current=None, stage="finished - selected %s" % name)
     print("\nSELECTED %s -> %s" % (name, out))
     for n, r in results.items():
         print("  %-22s val %.3f  test %.3f" % (n, r["val_accuracy"], r["test"]["accuracy"]))

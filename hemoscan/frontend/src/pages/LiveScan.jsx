@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Fingerprint, Upload, ScanLine, Square } from 'lucide-react'
 import { api } from '../api'
+import { useAuth } from '../auth'
 import { useLive } from '../live'
 import ScanResult from '../components/ScanResult'
 
@@ -14,6 +15,7 @@ const STEPS = [
 const ORDER = STEPS.map((s) => s[0])
 
 export default function LiveScan() {
+  const { can } = useAuth()
   const { device, subscribe } = useLive()
   const [patients, setPatients] = useState([])
   const [patientId, setPatientId] = useState('')
@@ -93,12 +95,12 @@ export default function LiveScan() {
                 {patients.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}
               </select>
             </div>
-            <div className="row">
+            {can('scan') ? <div className="row">
               <button className="btn primary" onClick={start} disabled={!online || busy}><Fingerprint size={16} />Start capture</button>
               {busy && <button className="btn" onClick={cancel}><Square size={14} />Cancel</button>}
               <button className="btn" onClick={() => file.current.click()} disabled={busy}><Upload size={16} />Upload image</button>
               <input ref={file} type="file" accept="image/*" hidden onChange={(e) => upload(e.target.files[0])} />
-            </div>
+            </div> : <div className="banner">Your role cannot start scans. Ask an operator, doctor or admin.</div>}
             {err && <div className="banner bad" style={{ marginTop: 12 }}>{err}</div>}
           </div>
 
